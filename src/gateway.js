@@ -4,7 +4,10 @@ import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
 
-const timeout = (socket, ms) => socket.setTimeout(ms, () => socket.destroy(new Error('Proxy connection timed out')));
+const timeout = (socket, ms) => {
+  socket.setTimeout(ms);
+  return socket;
+};
 const onceData = socket => new Promise((resolve, reject) => {
   const onData = data => { cleanup(); resolve(data); };
   const onError = error => { cleanup(); reject(error); };
@@ -28,7 +31,12 @@ function connectSocket(host, port, secure, timeoutMs) {
     timeout(socket, timeoutMs);
     socket.once('connect', () => !secure && resolve(socket));
     if (secure) socket.once('secureConnect', () => resolve(socket));
-    socket.once('error', reject);
+    const fail = error => {
+      socket.destroy();
+      reject(error);
+    };
+    socket.once('error', fail);
+    socket.once('timeout', () => fail(new Error('Proxy connection timed out')));
   });
 }
 
