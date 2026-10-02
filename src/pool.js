@@ -5,6 +5,49 @@ import { requestViaProxy } from './proxy.js';
 import { initDatabase, ProxyNode, getState, setState, persistNodes } from './database.js';
 import { regionForCountry } from './regions.js';
 
+const IP_LOOKUP_URL = process.env.IP_LOOKUP_URL || 'https://api.nekosunevr.co.uk/v5/proxy/iplookup';
+const IP_LOOKUP_TIMEOUT_MS = Math.max(1000, Number.parseInt(process.env.IP_LOOKUP_TIMEOUT_MS || '5000', 10));
+const IP_LOOKUP_TTL_MS = Math.max(60000, Number.parseInt(process.env.IP_LOOKUP_TTL_MS || '21600000', 10));
+const ipLookupCache = new Map();
+
+async function lookupExitIp(ip) {
+  if (!ip) return null;
+  const cached = ipLookupCache.get(ip);
+  if (cached && Date.now() - cached.at < IP_LOOKUP_TTL_MS) return cached.data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), IP_LOOKUP_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${IP_LOOKUP_URL}?ip=${encodeURIComponent(ip)}`, {
+      signal: controller.signal,
+      headers: { accept: 'application/json', 'user-agent': 'NekoRoute/0.6 (+proxy-ip-classification)' }
+    });
+    if (!response.ok) throw new Error(`IP lookup HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data?.valid) throw new Error('IP lookup returned invalid result');
+    ipLookupCache.set(ip, { at: Date.now(), data });
+    return data;
+  } finally { clearTimeout(timer); }
+}
+
+function applyIpLookup(node, data) {
+  if (!data) return;
+  Object.assign(node, {
+    connectionType: data.connection_type || null,
+    isVpn: data.is_vpn ?? null,
+    isProxy: data.is_proxy ?? null,
+    isTor: data.is_tor ?? null,
+    isHostingProvider: data.is_hosting_provider ?? null,
+    isNonResidential: data.is_non_residential ?? null,
+    isHomeResidential: data.is_home_residential ?? null,
+    ipAsn: data.asn ?? null,
+    ipOrg: data.org || null,
+    ipConfidence: data.confidence || null,
+    ipDetectionSource: data.detection_source || null,
+    ipDetectionReason: data.detection_reason || null,
+    ipLookupAt: new Date().toISOString()
+  });
+}
+
 export class ProxyPool {
   constructor(config) {
     this.config = config;
@@ -140,6 +183,13 @@ export class ProxyPool {
         lastSuccess: checkedAt,
         lastError: null
       });
+      if (exitIp) {
+        const lookupExpired = !node.ipLookupAt || Date.now() - new Date(node.ipLookupAt).getTime() >= IP_LOOKUP_TTL_MS;
+        if (node.exitIp !== exitIp || lookupExpired) {
+          try { applyIpLookup(node, await lookupExitIp(exitIp)); }
+          catch (error) { console.warn(`[iplookup] ${exitIp}: ${error.message}`); }
+        }
+      }
     } catch (error) {
       const failures = (node.failures || 0) + 1;
       const consecutiveFailures = (node.consecutiveFailures || 0) + 1;
