@@ -508,7 +508,8 @@ const gateways=startProxyGateways(pool,{
   timeoutMs:int('PROXY_GATEWAY_TIMEOUT_MS',12000),
   maxRetries:int('PROXY_GATEWAY_MAX_RETRIES',4),
   tlsCert:process.env.PROXY_GATEWAY_TLS_CERT||'',
-  tlsKey:process.env.PROXY_GATEWAY_TLS_KEY||''
+  tlsKey:process.env.PROXY_GATEWAY_TLS_KEY||'',
+  networkType:(process.env.PROXY_GATEWAY_NETWORK_TYPE||'any').toLowerCase()
 });
 let sourceBusy=false,sweepBusy=false;
 const refresh=async()=>{if(sourceBusy)return;sourceBusy=true;try{const r=await pool.refreshSources();console.log(`[sources] ${r.retained?'retained':'loaded'} ${r.count} proxies (${r.discoveredThisRefresh??0} seen this refresh)`);for(const stat of r.sourceStats||[]){if(stat.ok)console.log(`[sources:${stat.source}] ${stat.count} proxies${stat.endpoint?` via ${stat.endpoint}`:''}`);else console.error(`[sources:${stat.source}] failed - ${(stat.errors||[]).map(x=>`${x.endpoint}: ${x.error}`).join(' | ')}`);}}catch(e){console.error('[sources]',e.message);}finally{sourceBusy=false;}};
