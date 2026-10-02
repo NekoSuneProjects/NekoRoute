@@ -1,13 +1,14 @@
 import { esc, flag, countryName, countryLabel, regions } from '/common.js?v=0507-20260914T1552';
 
 const $ = s => document.querySelector(s);
-const state = { stats: null, region: '', country: '', protocol: '', status: 'online', page:1, pageSize:50, pages:1, total:0 };
+const state = { stats: null, region: '', country: '', protocol: '', networkType: '', status: 'online', page:1, pageSize:50, pages:1, total:0 };
 
 function option(value, label) { return `<option value="${esc(value)}">${esc(label)}</option>`; }
 function syncSelects() {
   $('#regionSelect').value = state.region;
   $('#countrySelect').value = state.country;
   $('#protocolSelect').value = state.protocol;
+  $('#networkTypeSelect').value = state.networkType;
   $('#statusSelect').value = state.status;
   document.querySelectorAll('.region-card').forEach(el => el.classList.toggle('active', el.dataset.region === state.region));
 }
@@ -52,6 +53,17 @@ async function loadStats() {
   renderRegions(); buildFilters();
 }
 
+function networkBadge(network = {}) {
+  let label = 'Unknown', cls = 'bg-zinc-800 text-zinc-400';
+  if (network.isTor) { label='Tor'; cls='bg-purple-500/10 text-purple-300'; }
+  else if (network.isVpn) { label='VPN'; cls='bg-sky-500/10 text-sky-300'; }
+  else if (network.isProxy) { label='Proxy'; cls='bg-amber-500/10 text-amber-300'; }
+  else if (network.isHomeResidential) { label='Residential'; cls='bg-emerald-500/10 text-emerald-300'; }
+  else if (network.isHostingProvider || network.connectionType === 'hosting') { label='Hosting / VPS'; cls='bg-indigo-500/10 text-indigo-300'; }
+  else if (network.isNonResidential) { label='Non-residential'; cls='bg-zinc-700/40 text-zinc-300'; }
+  return `<span class="rounded-full px-2 py-1 text-xs font-bold ${cls}" title="${esc(network.org || network.detectionReason || '')}">${label}</span>`;
+}
+
 function statusBadge(status) {
   const cls = status === 'online' ? 'bg-emerald-500/10 text-emerald-300' : status === 'degraded' ? 'bg-amber-500/10 text-amber-300' : status === 'offline' ? 'bg-rose-500/10 text-rose-300' : 'bg-zinc-800 text-zinc-400';
   return `<span class="rounded-full px-2 py-1 text-xs font-bold ${cls}">${esc(status)}</span>`;
@@ -63,6 +75,7 @@ async function loadProxies({ resetPage=false } = {}) {
   if (state.region) q.set('region', state.region);
   if (state.country) q.set('country', state.country);
   if (state.protocol) q.set('protocol', state.protocol);
+  if (state.networkType) q.set('networkType', state.networkType);
   if (state.status) q.set('status', state.status);
   const res = await fetch('/api/v1/nodes?' + q);
   const data = await res.json();
@@ -73,14 +86,14 @@ async function loadProxies({ resetPage=false } = {}) {
   $('#tablePage').textContent = `Page ${state.page} of ${state.pages}`;
   $('#tablePrev').disabled = state.page <= 1;
   $('#tableNext').disabled = state.page >= state.pages;
-  $('#proxyRows').innerHTML = nodes.length ? nodes.map(n => `<tr class="hover:bg-emerald-500/[.025]"><td class="px-5 py-3 font-mono text-xs text-zinc-300">${esc(n.address)}</td><td class="px-4 py-3">${flag(n.country)} <span class="font-semibold">${esc(countryName(n.country))}</span> <span class="text-xs text-zinc-600">(${esc(n.country)})</span><div class="text-xs text-zinc-600">${esc(n.region)} · ${esc(n.city)}</div></td><td class="px-4 py-3"><span class="rounded-lg border border-zinc-800 bg-black/20 px-2 py-1 font-mono text-xs">${esc(n.protocol)}</span></td><td class="px-4 py-3">${n.latencyMs == null ? '—' : `${n.latencyMs} ms`}</td><td class="px-4 py-3">${n.reliability == null ? '—' : `${n.reliability}%`}</td><td class="px-4 py-3">${statusBadge(n.status)}</td><td class="px-5 py-3 text-xs text-zinc-500">${n.lastCheck ? new Date(n.lastCheck).toLocaleString() : 'Never'}</td></tr>`).join('') : `<tr><td colspan="7" class="px-5 py-14 text-center text-zinc-500">No nodes match these filters yet.</td></tr>`;
+  $('#proxyRows').innerHTML = nodes.length ? nodes.map(n => `<tr class="hover:bg-emerald-500/[.025]"><td class="px-5 py-3 font-mono text-xs text-zinc-300">${esc(n.address)}</td><td class="px-4 py-3">${flag(n.country)} <span class="font-semibold">${esc(countryName(n.country))}</span> <span class="text-xs text-zinc-600">(${esc(n.country)})</span><div class="text-xs text-zinc-600">${esc(n.region)} · ${esc(n.city)}</div></td><td class="px-4 py-3"><span class="rounded-lg border border-zinc-800 bg-black/20 px-2 py-1 font-mono text-xs">${esc(n.protocol)}</span></td><td class="px-4 py-3">${networkBadge(n.network)}</td><td class="px-4 py-3">${n.latencyMs == null ? '—' : `${n.latencyMs} ms`}</td><td class="px-4 py-3">${n.reliability == null ? '—' : `${n.reliability}%`}</td><td class="px-4 py-3">${statusBadge(n.status)}</td><td class="px-5 py-3 text-xs text-zinc-500">${n.lastCheck ? new Date(n.lastCheck).toLocaleString() : 'Never'}</td></tr>`).join('') : `<tr><td colspan="8" class="px-5 py-14 text-center text-zinc-500">No nodes match these filters yet.</td></tr>`;
 }
 
-for (const [id,key] of [['regionSelect','region'],['countrySelect','country'],['protocolSelect','protocol'],['statusSelect','status']]) {
+for (const [id,key] of [['regionSelect','region'],['countrySelect','country'],['protocolSelect','protocol'],['networkTypeSelect','networkType'],['statusSelect','status']]) {
   $('#'+id)?.addEventListener('change', e => { state[key]=e.target.value; syncSelects(); loadProxies({resetPage:true}); });
 }
 $('#reloadBtn').onclick = async () => { await loadStats(); await loadProxies(); };
-$('#clearFilters').onclick = () => { Object.assign(state,{region:'',country:'',protocol:'',status:'online',page:1}); syncSelects(); loadProxies({resetPage:true}); };
+$('#clearFilters').onclick = () => { Object.assign(state,{region:'',country:'',protocol:'',networkType:'',status:'online',page:1}); syncSelects(); loadProxies({resetPage:true}); };
 $('#tablePrev').onclick=()=>{if(state.page>1){state.page--;loadProxies();}};
 $('#tableNext').onclick=()=>{if(state.page<state.pages){state.page++;loadProxies();}};
 $('#tablePageSize').onchange=e=>{state.pageSize=Number(e.target.value||50);state.page=1;loadProxies({resetPage:true});};
