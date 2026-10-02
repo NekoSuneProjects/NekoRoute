@@ -237,6 +237,25 @@ export class ProxyPool {
     this.cursor = (this.cursor + batch.length) % nodes.length;
     const limit = pLimit(12);
     await Promise.allSettled(batch.map(node => limit(() => this.checkNode(node))));
+
+    // Automatically refresh network classification for usable routes. This keeps
+    // Residential / Hosting / VPN / Proxy / Tor tags current without an admin UI.
+    const now = Date.now();
+    const classify = batch.filter(node =>
+      (node.status === 'online' || node.status === 'degraded') &&
+      node.exitIp &&
+      (!node.ipLookupAt || now - new Date(node.ipLookupAt).getTime() >= IP_LOOKUP_TTL_MS)
+    );
+    const classifyLimit = pLimit(8);
+    await Promise.allSettled(classify.map(node => classifyLimit(async () => {
+      try {
+        ipLookupCache.delete(node.exitIp);
+        applyIpLookup(node, await lookupExitIp(node.exitIp));
+      } catch (error) {
+        console.warn(`[iplookup] automatic refresh ${node.exitIp}: ${error.message}`);
+      }
+    })));
+
     this.lastHealthSweep = new Date().toISOString();
     await this.saveState(batch);
   }
