@@ -689,6 +689,54 @@ function staticNodes() {
   return out;
 }
 
+function manualProxyItem(rawUrl, source = 'Manual') {
+  try {
+    const u = new URL(String(rawUrl || '').trim());
+    const protocol = normalizeProtocol(u.protocol.replace(':',''));
+    if (!['http','https','socks4','socks5'].includes(protocol)) return null;
+    const port = Number(u.port || (protocol === 'https' ? 443 : protocol === 'http' ? 80 : 0));
+    if (!u.hostname || !port) return null;
+    const url = u.toString().replace(/\/$/, '');
+    return {
+      id:url,url,protocol,ip:u.hostname,port,https:protocol==='https',anonymity:'unknown',
+      sourceScore:1,country:'XX',city:'Manual',source,region:regionForCountry('XX'),
+      status:'unknown',latencyMs:null,exitIp:null,successes:0,failures:0,consecutiveFailures:0,lastCheck:null,lastSuccess:null
+    };
+  } catch { return null; }
+}
+
+function manualProxyNodes() {
+  const raw = String(process.env.MANUAL_PROXIES || '').trim();
+  if (!raw) return [];
+  return raw.split(/[;\n,]+/).map(x => manualProxyItem(x, 'ManualEnv')).filter(Boolean);
+}
+
+async function manualProxyLists() {
+  const raw = String(process.env.MANUAL_PROXY_LISTS || '').trim();
+  if (!raw) return { items:[], stats:[] };
+  const specs = raw.split(/[;\n]+/).map(x=>x.trim()).filter(Boolean);
+  const items=[], stats=[];
+  for (const spec of specs) {
+    const split = spec.indexOf('|');
+    const protocol = split > 0 ? normalizeProtocol(spec.slice(0,split)) : '';
+    const endpoint = split > 0 ? spec.slice(split+1).trim() : spec;
+    if (!['http','https','socks4','socks5'].includes(protocol)) {
+      stats.push({source:'ManualList',ok:false,count:0,errors:[{endpoint,error:'Prefix list URL with protocol, e.g. socks5|https://example/list.txt'}]});
+      continue;
+    }
+    try {
+      const text = await downloadText(endpoint);
+      const parsed = text.split(/\r?\n/).map(line=>parseHostPort(line,protocol)).filter(Boolean)
+        .map(x=>manualProxyItem(`${x.protocol}://${x.ip}:${x.port}`, 'ManualList'));
+      items.push(...parsed.filter(Boolean));
+      stats.push({source:`ManualList:${protocol}`,ok:true,count:parsed.length,endpoint});
+    } catch(error) {
+      stats.push({source:`ManualList:${protocol}`,ok:false,count:0,errors:[{endpoint,error:String(error.message||error).slice(0,240)}]});
+    }
+  }
+  return {items,stats};
+}
+
 function diversityPick(items, max) {
   if (items.length <= max) return items;
   const buckets = new Map();
@@ -783,6 +831,10 @@ export async function fetchProxySources(maxProxies = 5000) {
     }
   }
 
+  const manualLists = await manualProxyLists();
+  all.push(...manualLists.items);
+  sourceStats.push(...manualLists.stats);
+
   const merged = new Map();
   for (const item of all) {
     const url = `${item.protocol}://${item.ip}:${item.port}`;
@@ -804,7 +856,8 @@ export async function fetchProxySources(maxProxies = 5000) {
     lastSuccess: null
   }));
 
-  const statics = staticNodes();
+  const statics = [...staticNodes(), ...manualProxyNodes()];
+  sourceStats.push({ source: 'ManualEnv', ok: true, count: manualProxyNodes().length });
   const staticIds = new Set(statics.map(x => x.id));
   const budget = Math.max(0, maxProxies - statics.length);
   const picked = diversityPick(hydrated.filter(x => !staticIds.has(x.id)), budget);
