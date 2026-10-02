@@ -203,6 +203,30 @@ export class ProxyPool {
     }
   }
 
+  async refreshIpClassifications({ force = false, onlineOnly = true } = {}) {
+    const now = Date.now();
+    const nodes = [...this.nodes.values()].filter(node =>
+      node.exitIp &&
+      (!onlineOnly || node.status === 'online') &&
+      (force || !node.ipLookupAt || now - new Date(node.ipLookupAt).getTime() >= IP_LOOKUP_TTL_MS)
+    );
+    const limit = pLimit(8);
+    let updated = 0, failed = 0;
+    if (force) ipLookupCache.clear();
+    await Promise.allSettled(nodes.map(node => limit(async () => {
+      try {
+        if (force) ipLookupCache.delete(node.exitIp);
+        applyIpLookup(node, await lookupExitIp(node.exitIp));
+        updated++;
+      } catch (error) {
+        failed++;
+        console.warn(`[iplookup] refresh ${node.exitIp}: ${error.message}`);
+      }
+    })));
+    await this.saveState(nodes);
+    return { checked: nodes.length, updated, failed, force, onlineOnly };
+  }
+
   async healthSweep() {
     const nodes = [...this.nodes.values()];
     if (!nodes.length) return;
