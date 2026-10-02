@@ -84,9 +84,61 @@ export const ScanResult = sequelize.define('ScanResult', {
   indexes: [{ fields: ['hostname'] }, { fields: ['scannedAt'] }]
 });
 
+const migrations = [
+  {
+    version: 1,
+    name: 'proxy-ip-classification',
+    async up(queryInterface) {
+      const columns = await queryInterface.describeTable('proxy_nodes');
+      const additions = [
+        ['connectionType', { type: DataTypes.STRING(32), allowNull: true }],
+        ['isVpn', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['isProxy', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['isTor', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['isHostingProvider', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['isNonResidential', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['isHomeResidential', { type: DataTypes.BOOLEAN, allowNull: true }],
+        ['ipAsn', { type: DataTypes.BIGINT, allowNull: true }],
+        ['ipOrg', { type: DataTypes.STRING(255), allowNull: true }],
+        ['ipConfidence', { type: DataTypes.STRING(32), allowNull: true }],
+        ['ipDetectionSource', { type: DataTypes.STRING(64), allowNull: true }],
+        ['ipDetectionReason', { type: DataTypes.STRING(512), allowNull: true }],
+        ['ipLookupAt', { type: DataTypes.DATE, allowNull: true }]
+      ];
+      for (const [column, definition] of additions) {
+        if (!columns[column]) await queryInterface.addColumn('proxy_nodes', column, definition);
+      }
+    }
+  }
+];
+
+async function runMigrations() {
+  const queryInterface = sequelize.getQueryInterface();
+  await sequelize.query('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at DATETIME NOT NULL)');
+  const [rows] = await sequelize.query('SELECT version FROM schema_migrations');
+  const applied = new Set(rows.map(row => Number(row.version)));
+  for (const migration of migrations.sort((a,b) => a.version - b.version)) {
+    if (applied.has(migration.version)) continue;
+    const transaction = await sequelize.transaction();
+    try {
+      await migration.up(queryInterface, transaction);
+      await sequelize.query('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', {
+        replacements: [migration.version, migration.name, new Date().toISOString()],
+        transaction
+      });
+      await transaction.commit();
+      console.log('[database] migration ' + migration.version + ' applied: ' + migration.name);
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+  }
+}
+
 export async function initDatabase() {
   await sequelize.authenticate();
   await sequelize.sync();
+  await runMigrations();
 }
 
 export async function getState(key, fallback = null) {
