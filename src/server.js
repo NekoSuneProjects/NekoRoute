@@ -61,7 +61,9 @@ const findNodeByRef=ref=>[...pool.nodes.values()].find(node=>nodeRef(node)===ref
 const safeNode=node=>({
   ref:nodeRef(node),protocol:node.protocol,country:normalizeCountry(node.country),countryName:countryName(node.country),city:node.city,region:node.region,
   anonymity:node.anonymity,status:node.status,latencyMs:node.latencyMs,lastCheck:node.lastCheck,lastSuccess:node.lastSuccess,
-  address:config.exposeAddresses?`${node.ip}:${node.port}`:'hidden',reliability:(node.successes||0)+(node.failures||0)?Math.round((node.successes||0)/((node.successes||0)+(node.failures||0))*100):null
+  address:config.exposeAddresses?`${node.ip}:${node.port}`:'hidden',
+  network:{connectionType:node.connectionType||null,isVpn:node.isVpn??null,isProxy:node.isProxy??null,isTor:node.isTor??null,isHostingProvider:node.isHostingProvider??null,isNonResidential:node.isNonResidential??null,isHomeResidential:node.isHomeResidential??null,asn:node.ipAsn??null,org:node.ipOrg||null,confidence:node.ipConfidence||null,detectionSource:node.ipDetectionSource||null,detectionReason:node.ipDetectionReason||null,lookupAt:node.ipLookupAt||null},
+  reliability:(node.successes||0)+(node.failures||0)?Math.round((node.successes||0)/((node.successes||0)+(node.failures||0))*100):null
 });
 const selector=body=>({country:body?.country?normalizeCountry(body.country):undefined,region:body?.region?String(body.region):undefined,protocol:body?.protocol?String(body.protocol).toLowerCase():undefined});
 
