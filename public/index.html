@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#07110b" />
   <title>NekoRoute — Region Egress Dashboard</title>
-  <link rel="stylesheet" href="/app.css?v=0507-20260914T1552" />
+  <link rel="stylesheet" href="/app.css?v=0508-20261002T1405" />
 </head>
 <body class="min-h-screen text-zinc-100 antialiased">
   <div class="fixed inset-0 -z-20 bg-[#050807]"></div>
@@ -80,21 +80,22 @@
     </section>
 
     <section class="mt-7 glass rounded-[2rem] border border-zinc-800 p-5">
-      <div class="grid gap-3 md:grid-cols-4">
+      <div class="grid gap-3 md:grid-cols-5">
         <label class="text-xs text-zinc-500">Region<select id="regionSelect" class="mt-1 block w-full rounded-xl border border-zinc-800 bg-[#080d0a] px-3 py-2.5 text-sm text-zinc-100"></select></label>
         <label class="text-xs text-zinc-500">Country<select id="countrySelect" class="mt-1 block w-full rounded-xl border border-zinc-800 bg-[#080d0a] px-3 py-2.5 text-sm text-zinc-100"></select></label>
         <label class="text-xs text-zinc-500">Protocol<select id="protocolSelect" class="mt-1 block w-full rounded-xl border border-zinc-800 bg-[#080d0a] px-3 py-2.5 text-sm text-zinc-100"><option value="">All protocols</option><option>http</option><option>https</option><option>socks4</option><option>socks5</option></select></label>
+        <label class="text-xs text-zinc-500">Network type<select id="networkTypeSelect" class="mt-1 block w-full rounded-xl border border-zinc-800 bg-[#080d0a] px-3 py-2.5 text-sm text-zinc-100"><option value="">All network types</option><option value="residential">Residential</option><option value="hosting">Hosting / VPS</option><option value="vpn">VPN</option><option value="proxy">Proxy</option><option value="tor">Tor</option><option value="non-residential">Non-residential</option><option value="unknown">Unknown</option></select></label>
         <label class="text-xs text-zinc-500">State<select id="statusSelect" class="mt-1 block w-full rounded-xl border border-zinc-800 bg-[#080d0a] px-3 py-2.5 text-sm text-zinc-100"><option value="online">Online only</option><option value="">All states</option><option value="degraded">Degraded</option><option value="offline">Offline</option><option value="unknown">Unchecked</option></select></label>
       </div>
     </section>
 
     <section class="mt-5 overflow-hidden rounded-[2rem] border border-zinc-800 bg-[#080d0a]/80">
       <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4"><div><h2 class="font-black">Proxy nodes</h2><p id="tableSummary" class="text-xs text-zinc-500">Loading…</p></div><button id="reloadBtn" class="rounded-xl border border-zinc-700 px-3 py-2 text-sm hover:border-emerald-500/40">Reload</button></div>
-      <div class="overflow-x-auto"><table class="w-full min-w-[850px] text-left text-sm"><thead class="text-xs uppercase tracking-wider text-zinc-500"><tr><th class="px-5 py-3">Node</th><th class="px-4 py-3">Location</th><th class="px-4 py-3">Protocol</th><th class="px-4 py-3">Latency</th><th class="px-4 py-3">Reliability</th><th class="px-4 py-3">Status</th><th class="px-5 py-3">Last check</th></tr></thead><tbody id="proxyRows" class="divide-y divide-zinc-900"></tbody></table></div>
+      <div class="overflow-x-auto"><table class="w-full min-w-[850px] text-left text-sm"><thead class="text-xs uppercase tracking-wider text-zinc-500"><tr><th class="px-5 py-3">Node</th><th class="px-4 py-3">Location</th><th class="px-4 py-3">Protocol</th><th class="px-4 py-3">Network</th><th class="px-4 py-3">Latency</th><th class="px-4 py-3">Reliability</th><th class="px-4 py-3">Status</th><th class="px-5 py-3">Last check</th></tr></thead><tbody id="proxyRows" class="divide-y divide-zinc-900"></tbody></table></div>
       <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 px-5 py-4 text-sm"><div class="flex items-center gap-2"><button id="tablePrev" class="rounded-xl border border-zinc-800 px-3 py-2 disabled:opacity-30">← Previous</button><button id="tableNext" class="rounded-xl border border-zinc-800 px-3 py-2 disabled:opacity-30">Next →</button></div><div id="tablePage" class="text-xs text-zinc-500">Page 1</div><label class="text-xs text-zinc-500">Rows <select id="tablePageSize" class="ml-1 rounded-lg border border-zinc-800 bg-[#080d0a] px-2 py-1.5 text-zinc-200"><option>25</option><option selected>50</option><option>100</option><option>200</option></select></label></div>
     </section>
 
     <div class="mt-6 rounded-2xl border border-amber-500/15 bg-amber-500/5 p-4 text-sm text-amber-100/70">Public proxies are untrusted infrastructure. Don’t send passwords, cookies, private API keys, payment data, or other sensitive traffic through them. “Online” means a recent check succeeded; it cannot guarantee zero downtime.</div>
   </main>
-<script src="/app.js?v=0507-20260914T1552" type="module"></script>
+<script src="/app.js?v=0508-20261002T1405" type="module"></script>
 </body></html>
