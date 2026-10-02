@@ -285,3 +285,25 @@ X-NekoRoute-Upstream-Status: 403
 ```
 
 The Site Tester/API endpoints are unchanged and still report real upstream status codes in their JSON results.
+
+
+## Automatic SOCKS5 / HTTP / HTTPS gateway
+
+NekoRoute can expose its continuously refreshed, health-checked proxy pool as stable local proxy endpoints. Enable `PROXY_GATEWAY_ENABLED=true`. Only upstream nodes currently marked online and using SOCKS5, HTTP, or HTTPS are eligible; failed connection attempts are marked back into the pool and the gateway retries another healthy node.
+
+Client formats:
+
+```text
+socks5://127.0.0.1:1080
+socks5://user:pass@127.0.0.1:1080
+
+http://127.0.0.1:8080
+http://user:pass@127.0.0.1:8080
+
+https://127.0.0.1:8443
+https://user:pass@127.0.0.1:8443
+```
+
+The HTTPS listener is a TLS-wrapped forward proxy and requires `PROXY_GATEWAY_TLS_CERT` and `PROXY_GATEWAY_TLS_KEY`. HTTP port 8080 supports normal HTTP proxy traffic and HTTPS destinations through CONNECT. Set `PROXY_GATEWAY_USERNAME` and `PROXY_GATEWAY_PASSWORD` to require client authentication; leave both blank only on a trusted network.
+
+The gateway does not use unchecked entries directly. Proxy sources continue to be refreshed by NekoRoute and its normal health sweeps determine the eligible pool.
