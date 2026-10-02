@@ -111,11 +111,11 @@ function authOk(header, username, password) {
 
 export function startProxyGateways(pool, {
   enabled = false, host = '0.0.0.0', socksPort = 1080, httpPort = 8080, httpsPort = 8443,
-  username = '', password = '', timeoutMs = 12000, maxRetries = 4, tlsCert = '', tlsKey = ''
+  username = '', password = '', timeoutMs = 12000, maxRetries = 4, tlsCert = '', tlsKey = '', networkType = 'any'
 } = {}) {
   if (!enabled) return { close: () => {} };
   const servers = [];
-  const candidates = () => pool.list({status:'online'}).filter(n => ['socks5','http','https'].includes(n.protocol));
+  const candidates = () => pool.list({status:'online',networkType}).filter(n => ['socks5','http','https'].includes(n.protocol));
 
   async function connectBest(hostname, port) {
     let lastError;
