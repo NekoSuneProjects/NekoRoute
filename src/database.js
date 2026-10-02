@@ -27,6 +27,19 @@ export const ProxyNode = sequelize.define('ProxyNode', {
   status: { type: DataTypes.STRING(16), defaultValue: 'unknown' },
   latencyMs: { type: DataTypes.INTEGER, allowNull: true },
   exitIp: { type: DataTypes.STRING(255), allowNull: true },
+  connectionType: { type: DataTypes.STRING(32), allowNull: true },
+  isVpn: { type: DataTypes.BOOLEAN, allowNull: true },
+  isProxy: { type: DataTypes.BOOLEAN, allowNull: true },
+  isTor: { type: DataTypes.BOOLEAN, allowNull: true },
+  isHostingProvider: { type: DataTypes.BOOLEAN, allowNull: true },
+  isNonResidential: { type: DataTypes.BOOLEAN, allowNull: true },
+  isHomeResidential: { type: DataTypes.BOOLEAN, allowNull: true },
+  ipAsn: { type: DataTypes.BIGINT, allowNull: true },
+  ipOrg: { type: DataTypes.STRING(255), allowNull: true },
+  ipConfidence: { type: DataTypes.STRING(32), allowNull: true },
+  ipDetectionSource: { type: DataTypes.STRING(64), allowNull: true },
+  ipDetectionReason: { type: DataTypes.STRING(512), allowNull: true },
+  ipLookupAt: { type: DataTypes.DATE, allowNull: true },
   successes: { type: DataTypes.INTEGER, defaultValue: 0 },
   failures: { type: DataTypes.INTEGER, defaultValue: 0 },
   consecutiveFailures: { type: DataTypes.INTEGER, defaultValue: 0 },
@@ -101,7 +114,7 @@ export async function persistNodes(nodes) {
   await ProxyNode.bulkCreate(rows, {
     updateOnDuplicate: [
       'url','protocol','ip','port','https','anonymity','sourceScore','country','city','source','region',
-      'status','latencyMs','exitIp','successes','failures','consecutiveFailures','lastCheck','lastSuccess',
+      'status','latencyMs','exitIp','connectionType','isVpn','isProxy','isTor','isHostingProvider','isNonResidential','isHomeResidential','ipAsn','ipOrg','ipConfidence','ipDetectionSource','ipDetectionReason','ipLookupAt','successes','failures','consecutiveFailures','lastCheck','lastSuccess',
       'lastError','firstSeen','lastSeen','sourcePresent'
     ]
   });
