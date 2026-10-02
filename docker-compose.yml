@@ -30,6 +30,9 @@ services:
       NODE_OPTIONS: --dns-result-order=ipv4first
     ports:
       - "3210:3210"
+      - "1080:1080"
+      - "8080:8080"
+      - "8443:8443"
     volumes:
       - proxy_data:/app/data
     security_opt:
