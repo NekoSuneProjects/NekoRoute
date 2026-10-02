@@ -225,12 +225,27 @@ export class ProxyPool {
     return reliability * 70 + source * 20 + Math.max(0, 10 - latency / 700);
   }
 
-  select({ country, region, protocol } = {}) {
+  matchesNetworkType(node, type) {
+    if (!type || type === 'any') return true;
+    switch (String(type).toLowerCase()) {
+      case 'residential': case 'home': return node.isHomeResidential === true;
+      case 'hosting': case 'vps': case 'datacenter': return node.isHostingProvider === true || node.connectionType === 'hosting';
+      case 'vpn': return node.isVpn === true;
+      case 'proxy': return node.isProxy === true;
+      case 'tor': return node.isTor === true;
+      case 'non-residential': return node.isNonResidential === true;
+      case 'unknown': return node.isHomeResidential == null && node.isHostingProvider == null && node.isVpn == null && node.isProxy == null && node.isTor == null;
+      default: return true;
+    }
+  }
+
+  select({ country, region, protocol, networkType } = {}) {
     return [...this.nodes.values()]
       .filter(n => n.status === 'online')
       .filter(n => !country || n.country === country)
       .filter(n => !region || n.region === region)
       .filter(n => !protocol || n.protocol === protocol)
+      .filter(n => this.matchesNetworkType(n, networkType))
       .sort((a,b) => this.score(b) - this.score(a))[0] || null;
   }
 
@@ -240,6 +255,7 @@ export class ProxyPool {
       .filter(n => !filters.country || n.country === filters.country)
       .filter(n => !filters.region || n.region === filters.region)
       .filter(n => !filters.protocol || n.protocol === filters.protocol)
+      .filter(n => this.matchesNetworkType(n, filters.networkType))
       .sort((a,b) => this.score(b) - this.score(a));
   }
 
