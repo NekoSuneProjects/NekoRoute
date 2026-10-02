@@ -13,6 +13,7 @@ import { scanWebsite } from './scanner.js';
 import { saveScanResult } from './database.js';
 import { regionForCountry } from './regions.js';
 import { initThreatIntel, refreshThreatIntel, status as threatIntelStatus } from './threat-intel.js';
+import { startProxyGateways } from './gateway.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -494,9 +495,22 @@ app.get('/api/preview-resource/:id/:token',async(req,res)=>{
 app.use((err,_req,res,_next)=>{console.error(err);res.status(400).json({error:err.message||'Request failed'});});
 app.get('/tester',(_req,res)=>res.sendFile(path.join(root,'public','tester.html')));app.get('/preview',(_req,res)=>res.sendFile(path.join(root,'public','preview.html')));app.get('/browser',(_req,res)=>res.sendFile(path.join(root,'public','browser.html')));app.get('/scanner',(_req,res)=>res.sendFile(path.join(root,'public','scanner.html')));app.get(['/api','/api/docs'],(_req,res)=>res.sendFile(path.join(root,'public','api-docs.html')));app.get('/{*splat}',(_req,res)=>res.sendFile(path.join(root,'public','index.html')));
 const server=app.listen(config.port,'0.0.0.0',()=>console.log(`[NekoRoute] listening on :${config.port}`));
+const gateways=startProxyGateways(pool,{
+  enabled:bool('PROXY_GATEWAY_ENABLED',false),
+  host:process.env.PROXY_GATEWAY_HOST||'0.0.0.0',
+  socksPort:int('SOCKS5_GATEWAY_PORT',1080),
+  httpPort:int('HTTP_GATEWAY_PORT',8080),
+  httpsPort:int('HTTPS_GATEWAY_PORT',8443),
+  username:process.env.PROXY_GATEWAY_USERNAME||'',
+  password:process.env.PROXY_GATEWAY_PASSWORD||'',
+  timeoutMs:int('PROXY_GATEWAY_TIMEOUT_MS',12000),
+  maxRetries:int('PROXY_GATEWAY_MAX_RETRIES',4),
+  tlsCert:process.env.PROXY_GATEWAY_TLS_CERT||'',
+  tlsKey:process.env.PROXY_GATEWAY_TLS_KEY||''
+});
 let sourceBusy=false,sweepBusy=false;
 const refresh=async()=>{if(sourceBusy)return;sourceBusy=true;try{const r=await pool.refreshSources();console.log(`[sources] ${r.retained?'retained':'loaded'} ${r.count} proxies (${r.discoveredThisRefresh??0} seen this refresh)`);for(const stat of r.sourceStats||[]){if(stat.ok)console.log(`[sources:${stat.source}] ${stat.count} proxies${stat.endpoint?` via ${stat.endpoint}`:''}`);else console.error(`[sources:${stat.source}] failed - ${(stat.errors||[]).map(x=>`${x.endpoint}: ${x.error}`).join(' | ')}`);}}catch(e){console.error('[sources]',e.message);}finally{sourceBusy=false;}};
 const sweep=async()=>{if(sweepBusy)return;sweepBusy=true;try{await pool.healthSweep();console.log('[health] sweep complete');}catch(e){console.error('[health]',e.message);}finally{sweepBusy=false;}};
 refresh().then(sweep);setInterval(refresh,config.sourceRefreshMs).unref();setInterval(sweep,config.healthIntervalMs).unref();setInterval(()=>pool.saveState(),120000).unref();
 if(config.openPhishEnabled)setInterval(()=>refreshThreatIntel(config).then(s=>console.log(`[threat-intel] OpenPhish cache ${s.cachedUrls} URLs`)).catch(e=>console.error('[threat-intel]',e.message)),config.threatFeedRefreshMs).unref();
-for(const signal of ['SIGTERM','SIGINT'])process.on(signal,async()=>{await pool.saveState();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,async()=>{await pool.saveState();gateways.close();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
