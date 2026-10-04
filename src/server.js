@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 import { ProxyPool } from './pool.js';
-import { validatePublicTarget } from './security.js';
+import { validatePublicTarget, validatePublicMediaTarget } from './security.js';
 import { requestViaProxy, openProxyStream } from './proxy.js';
 import { scanWebsite } from './scanner.js';
 import { saveScanResult } from './database.js';
@@ -323,7 +323,7 @@ async function pipeProxyStream(req,res,{node,target,kind='media',referer='',down
       const next=absolute(r.headers.location,current);
       r.resume();
       if(!next){r.destroy();return res.status(502).type('text').send('Invalid upstream redirect');}
-      current=await validatePublicTarget(next);
+      current=kind==='media' ? await validatePublicMediaTarget(next) : await validatePublicTarget(next);
       redirects++;
       continue;
     }
@@ -373,12 +373,13 @@ app.get('/api/v1/browser-ticket/:ticket',rateLimit(),(req,res)=>{const key=Strin
 
 const previewSessionHandler=async(req,res,next)=>{
   try{
-    const target=await validatePublicTarget(req.body?.url);
+    const purpose=String(req.body?.purpose||'web').toLowerCase();
+    const target=purpose==='media' ? await validatePublicMediaTarget(req.body?.url) : await validatePublicTarget(req.body?.url);
     const requested=req.body?.nodeRef?findNodeByRef(String(req.body.nodeRef)):null;
     const node=requested||pool.select(selector(req.body));
     if(!node||node.status!=='online')return res.status(503).json({error:'No healthy proxy matches that selection'});
     const id=randomUUID(),expiresAt=Date.now()+config.previewSessionTtlMs;
-    sessions.set(id,{nodeId:node.id,expiresAt,resources:new Map(),currentPage:target.toString()});
+    sessions.set(id,{nodeId:node.id,expiresAt,resources:new Map(),currentPage:target.toString(),purpose});
     res.json({
       ok:true,sessionId:id,expiresAt:new Date(expiresAt).toISOString(),url:target.toString(),frameUrl:pageUrl(id,target.toString()),node:safeNode(node),
       capabilities:{navigation:true,getForms:true,pageLinkedMedia:true,pageLinkedDownloads:true,audioVideoPlayback:true,rangeStreaming:true,remoteScripts:true,sandboxedScripts:true,runtimeGetFetch:true,cookies:false,postForms:false,webSockets:false}
@@ -415,7 +416,7 @@ app.get('/api/preview/:id',async(req,res)=>{
     const target=await validatePublicTarget(String(req.query.url||''));
     s.currentPage=target.toString();
     const r=await requestViaProxy(node,target,{timeoutMs:config.previewTimeoutMs,maxBytes:config.previewMaxHtmlBytes,headers:{accept:'text/html,application/xhtml+xml,audio/*,video/*,image/*,application/pdf;q=0.8,text/plain;q=0.7,*/*;q=0.2','user-agent':config.previewUserAgent,'accept-language':'en-GB,en;q=0.9'}});
-    if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){const next=absolute(r.headers.location,target);if(next){await validatePublicTarget(next);return res.redirect(302,pageUrl(req.params.id,next));}}
+    if(r.statusCode>=300&&r.statusCode<400&&r.headers.location){const next=absolute(r.headers.location,target);if(next){if(entry.kind==='media'&&s.purpose==='media')await validatePublicMediaTarget(next);else await validatePublicTarget(next);return res.redirect(302,pageUrl(req.params.id,next));}}
     const type=String(r.headers['content-type']||'text/html').toLowerCase();
     if(r.statusCode>=400){
       const textual=type.includes('text/')||type.includes('json')||type.includes('html')||type.includes('xml');
@@ -452,8 +453,10 @@ app.all('/api/preview-runtime/:id',async(req,res)=>{
   const s=getSession(String(req.params.id));if(!s)return res.status(410).json({error:'Preview session expired'});
   const node=pool.nodes.get(s.nodeId);if(!node||node.status==='offline')return res.status(503).json({error:'Selected proxy is unavailable'});
   try{
-    let target=await validatePublicTarget(String(req.query.url||''));
     const kind=String(req.query.kind||'');
+    let target=(kind==='media'&&s.purpose==='media')
+      ? await validatePublicMediaTarget(String(req.query.url||''))
+      : await validatePublicTarget(String(req.query.url||''));
     if(req.method==='GET'&&(kind==='media'||kind==='fetch')){
       return await pipeProxyStream(req,res,{node,target,kind:kind==='media'?'media':'download',referer:s.currentPage||target.origin+'/',cors:true});
     }
@@ -489,7 +492,7 @@ app.get('/api/preview-resource/:id/:token',async(req,res)=>{
   const entry=s.resources.get(String(req.params.token));if(!entry)return res.status(404).end();
   const node=pool.nodes.get(s.nodeId);if(!node||node.status==='offline')return res.status(503).end();
   try{
-    const target=await validatePublicTarget(entry.url);
+    const target=(entry.kind==='media'&&s.purpose==='media') ? await validatePublicMediaTarget(entry.url) : await validatePublicTarget(entry.url);
     if(entry.kind==='media'||entry.kind==='download'){
       return await pipeProxyStream(req,res,{node,target,kind:entry.kind==='media'?'media':'download',referer:entry.referer||s.currentPage||target.origin+'/',download:req.query.download==='1',cors:true});
     }
