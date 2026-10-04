@@ -15,6 +15,32 @@ import { regionForCountry } from './regions.js';
 import { initThreatIntel, refreshThreatIntel, status as threatIntelStatus } from './threat-intel.js';
 import { startProxyGateways } from './gateway.js';
 
+const EXPECTED_PROXY_NETWORK_ERRORS = new Set([
+  'ECONNRESET',
+  'EPIPE',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH'
+]);
+
+process.on('uncaughtException', error => {
+  const code = error?.code;
+  const stack = String(error?.stack || '');
+  const looksLikeTransportFailure =
+    EXPECTED_PROXY_NETWORK_ERRORS.has(code) &&
+    (error?.host || /node:internal\/(?:tls|net|streams)/.test(stack));
+
+  if (looksLikeTransportFailure) {
+    console.warn('[proxy-network] suppressed unhandled transport error:', code, error?.host || '', error?.port || '', error?.message || error);
+    return;
+  }
+
+  console.error('[fatal] uncaught exception:', error);
+  process.exitCode = 1;
+  setImmediate(() => process.exit(1));
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const int = (name, fallback) => Number.parseInt(process.env[name] || String(fallback), 10);

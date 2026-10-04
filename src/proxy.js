@@ -4,25 +4,48 @@ import { HttpProxyAgent } from 'http-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
-function guardProxySocket(req, onError) {
-  req.on('socket', socket => {
-    // Public proxies fail in many ugly ways. In particular a proxy/TLS socket can
-    // emit ECONNRESET directly instead of propagating the error through
-    // ClientRequest. Without a listener Node treats that as an unhandled error and
-    // terminates the whole process.
-    socket.on('error', error => {
-      try { onError(error); } catch {}
-    });
+function guardEmitter(emitter, onError) {
+  if (!emitter || typeof emitter.on !== 'function') return;
+  emitter.on('error', error => {
+    try { onError(error); } catch {}
   });
 }
 
+function guardProxyRequest(req, agent, onError) {
+  guardEmitter(agent, onError);
+  guardEmitter(req, onError);
+  req.on('socket', socket => {
+    // Covers HTTP, HTTPS/CONNECT, SOCKS4 and SOCKS5 sockets. Public proxies can
+    // reset/refuse/drop connections at any point, including before ClientRequest
+    // receives the error. Keeping a listener on the actual socket prevents Node
+    // from treating those transport failures as fatal unhandled events.
+    guardEmitter(socket, onError);
+  });
+}
+
+function proxyTransportUrl(proxy) {
+  const raw = new URL(proxy.url);
+
+  // Public proxy feeds usually label a node "https" when it supports HTTPS
+  // CONNECT tunnelling. That does NOT mean the proxy listener itself accepts a
+  // TLS connection. Using https:// here makes Node start TLS with the proxy and
+  // many public nodes immediately reset that socket (ECONNRESET).
+  //
+  // Keep the logical protocol as "https" for filtering/UI, but use ordinary
+  // HTTP transport to reach the proxy. HttpsProxyAgent will still issue CONNECT
+  // when the destination itself is HTTPS.
+  if (proxy.protocol === 'https') raw.protocol = 'http:';
+  return raw.toString();
+}
+
 export function makeAgent(proxy, targetProtocol = 'https:') {
+  const transportUrl = proxyTransportUrl(proxy);
   if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
-    return new SocksProxyAgent(proxy.url);
+    return new SocksProxyAgent(transportUrl);
   }
   return targetProtocol === 'http:'
-    ? new HttpProxyAgent(proxy.url)
-    : new HttpsProxyAgent(proxy.url);
+    ? new HttpProxyAgent(transportUrl)
+    : new HttpsProxyAgent(transportUrl);
 }
 
 export function requestViaProxy(proxy, targetUrl, {
@@ -94,9 +117,8 @@ export function requestViaProxy(proxy, targetUrl, {
       });
       res.on('error', fail);
     });
-    guardProxySocket(req, fail);
+    guardProxyRequest(req, agent, fail);
     req.on('timeout', () => req.destroy(new Error('Proxy request timed out')));
-    req.on('error', fail);
     if (body != null && !headersOnly) req.write(body);
     req.end();
   });
@@ -124,6 +146,20 @@ export function openProxyStream(proxy, targetUrl, {
         ...headers
       }
     }, response => {
+      // Streaming responses can fail after the promise has resolved. Keep a
+      // listener attached so a late proxy/socket reset is never unhandled.
+      guardEmitter(response, error => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      });
+      guardEmitter(response.socket, error => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      });
       if (settled) {
         response.destroy();
         return;
@@ -142,9 +178,8 @@ export function openProxyStream(proxy, targetUrl, {
       settled = true;
       reject(error);
     };
-    guardProxySocket(req, fail);
+    guardProxyRequest(req, agent, fail);
     req.on('timeout', () => req.destroy(new Error('Proxy request timed out')));
-    req.on('error', fail);
     req.end();
   });
 }
