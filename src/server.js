@@ -63,7 +63,7 @@ const config = {
   openPhishEnabled:bool('OPENPHISH_ENABLED',true), openPhishFeedUrl:process.env.OPENPHISH_FEED_URL||'https://openphish.com/feed.txt',
   threatFeedRefreshMs:Math.max(60*60*1000,int('THREAT_FEED_REFRESH_MS',12*60*60*1000)), threatFeedCachePath:process.env.THREAT_FEED_CACHE_PATH||'/app/data/openphish-cache.json',
   clamavHost:process.env.CLAMAV_HOST||'', clamavPort:int('CLAMAV_PORT',3310),
-  browserTicketTtlMs:Math.max(15000,Math.min(300000,int('BROWSER_TICKET_TTL_MS',90000)))
+  browserTicketTtlMs:Math.max(15000,Math.min(300000,int('BROWSER_TICKET_TTL_MS',90000))), tempRefreshApiKey:process.env.TEMP_REFRESH_API_KEY||'', tempRefreshConcurrency:Math.max(4,Math.min(64,int('TEMP_REFRESH_CONCURRENCY',24)))
 };
 
 const pool = new ProxyPool(config);
@@ -98,6 +98,17 @@ const rateLimit=max=>(req,res,next)=>{max||=config.publicRateLimitMax;const now=
 setInterval(()=>{const now=Date.now();for(const[k,b]of buckets)if(b.resetAt<=now)buckets.delete(k);},60000).unref();
 const requireAdmin=(req,res,next)=>!config.adminToken||req.get('x-admin-token')!==config.adminToken?res.status(401).json({error:'Admin token required'}):next();
 
+const requireTempRefresh=(req,res,next)=>{
+  if(!config.tempRefreshApiKey)return res.status(404).json({error:'Temporary refresh API is disabled'});
+  const bearer=String(req.get('authorization')||'').replace(/^Bearer\s+/i,'');
+  const supplied=String(req.get('x-refresh-api-key')||bearer||'');
+  if(supplied!==config.tempRefreshApiKey)return res.status(401).json({error:'Invalid refresh API key'});
+  next();
+};
+const refreshJobs=new Map();
+const latestRefreshJob=()=>[...refreshJobs.values()].sort((a,b)=>b.startedAt.localeCompare(a.startedAt))[0]||null;
+
+
 const statsHandler=(_req,res)=>res.json(pool.stats());
 const configHandler=(_req,res)=>res.json({
   exposeNodeAddresses:config.exposeAddresses,matrixMaxNodes:config.matrixMaxNodes,previewSessionTtlMs:config.previewSessionTtlMs,previewTimeoutMs:config.previewTimeoutMs,publicTools:true,previewAllowsAllPublicDomains:true,
@@ -130,6 +141,37 @@ app.get('/api/openapi.json',(_req,res)=>res.json({openapi:'3.1.0',info:{title:'N
   '/api/v1/health':{get:{summary:'Service health'}},'/api/v1/stats':{get:{summary:'Proxy pool statistics'}},'/api/v1/regions':{get:{summary:'Region counts'}},'/api/v1/countries':{get:{summary:'Country names and counts'}},'/api/v1/nodes':{get:{summary:'Filtered public node metadata'}},
   '/api/v1/test':{post:{summary:'Test one URL through a selected/best route'}},'/api/v1/test-matrix':{post:{summary:'Compare one URL across multiple routes'}},'/api/v1/scan':{post:{summary:'Defensive website scan through a proxy'}},'/api/v1/preview/session':{post:{summary:'Create a sandboxed interactive preview session'}},'/api/v1/preview/session/{id}/resources':{get:{summary:'List page-linked resources discovered in an active preview session'}},'/api/v1/browser-ticket':{post:{summary:'Create a one-time ticket for the optional local Firefox Bridge extension'}},'/api/v1/browser-ticket/{ticket}':{get:{summary:'Consume a one-time Firefox Bridge ticket'}}
 }}));
+
+
+app.post('/api/v1/admin/temp-refresh-all',requireTempRefresh,async(req,res)=>{
+  const running=[...refreshJobs.values()].find(job=>job.status==='running');
+  if(running)return res.status(202).json({ok:true,alreadyRunning:true,job:running});
+  const id=randomUUID();
+  const job={id,status:'running',stage:'starting',startedAt:new Date().toISOString(),finishedAt:null,error:null,result:null};
+  refreshJobs.set(id,job);
+  res.status(202).json({ok:true,jobId:id,statusUrl:`/api/v1/admin/temp-refresh-all/${id}`});
+  (async()=>{
+    try{
+      job.stage='sources';
+      const sources=await pool.refreshSources();
+      job.stage='health';
+      const health=await pool.healthSweepAll({concurrency:config.tempRefreshConcurrency});
+      job.stage='classification';
+      const classification=await pool.refreshIpClassifications({force:Boolean(req.body?.forceClassification),onlineOnly:false});
+      job.stage='complete';job.status='complete';job.finishedAt=new Date().toISOString();
+      job.result={sources,health,classification,stats:pool.stats()};
+    }catch(error){
+      job.status='failed';job.stage='failed';job.finishedAt=new Date().toISOString();job.error=String(error?.message||error);
+      console.error('[temp-refresh]',error);
+    }
+  })();
+});
+app.get('/api/v1/admin/temp-refresh-all/:id',requireTempRefresh,(req,res)=>{
+  const job=refreshJobs.get(String(req.params.id));
+  if(!job)return res.status(404).json({error:'Refresh job not found'});
+  res.json({ok:true,job});
+});
+app.get('/api/v1/admin/temp-refresh-all',requireTempRefresh,(_req,res)=>res.json({ok:true,job:latestRefreshJob()}));
 
 app.post('/api/admin/refresh',requireAdmin,async(_req,res,next)=>{try{res.json(await pool.refreshSources());}catch(e){next(e);}});
 app.post('/api/admin/sweep',requireAdmin,async(_req,res,next)=>{try{await pool.healthSweep();res.json({ok:true,stats:pool.stats()});}catch(e){next(e);}});
