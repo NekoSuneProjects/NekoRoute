@@ -260,6 +260,23 @@ export class ProxyPool {
     await this.saveState(batch);
   }
 
+
+  async healthSweepAll({ concurrency = 24 } = {}) {
+    const nodes = [...this.nodes.values()];
+    if (!nodes.length) return { checked: 0, online: 0, degraded: 0, offline: 0 };
+    const limit = pLimit(Math.max(1, Math.min(64, Number(concurrency) || 24)));
+    await Promise.allSettled(nodes.map(node => limit(() => this.checkNode(node))));
+    this.cursor = 0;
+    this.lastHealthSweep = new Date().toISOString();
+    await this.saveState(nodes);
+    return {
+      checked: nodes.length,
+      online: nodes.filter(n => n.status === 'online').length,
+      degraded: nodes.filter(n => n.status === 'degraded').length,
+      offline: nodes.filter(n => n.status === 'offline').length
+    };
+  }
+
   score(node) {
     const total = (node.successes || 0) + (node.failures || 0);
     const reliability = total ? (node.successes || 0) / total : 0.3;
