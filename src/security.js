@@ -18,17 +18,35 @@ function isPrivateIp(ip) {
 }
 
 
-async function validateCommon(rawUrl) {
+function mediaPortAllowed(port) {
+  const spec = String(process.env.MEDIA_ALLOWED_PORTS || '80,443,8000-8999').trim();
+  for (const token of spec.split(',').map(x => x.trim()).filter(Boolean)) {
+    const range = token.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const start = Number(range[1]), end = Number(range[2]);
+      if (port >= start && port <= end) return true;
+      continue;
+    }
+    if (Number(token) === port) return true;
+  }
+  return false;
+}
+
+async function validateCommon(rawUrl, { media = false } = {}) {
   let url;
   try { url = new URL(rawUrl); } catch { throw new Error('Invalid URL'); }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP/HTTPS URLs are allowed');
   if (url.username || url.password) throw new Error('Credentials in URLs are not allowed');
 
-  // Public tools are intentionally limited to ordinary web ports so they cannot become generic port scanners.
+  // General public tools stay restricted to normal web ports. Media sessions get
+  // a separate, explicit allowlist for common Icecast/Shoutcast-style ports.
   if (url.port) {
     const port = Number(url.port);
-    if (!((url.protocol === 'http:' && port === 80) || (url.protocol === 'https:' && port === 443))) {
-      throw new Error('Only standard web ports 80 and 443 are allowed');
+    const standard = (url.protocol === 'http:' && port === 80) || (url.protocol === 'https:' && port === 443);
+    if (!standard && !(media && mediaPortAllowed(port))) {
+      throw new Error(media
+        ? 'Media stream port is not allowed by MEDIA_ALLOWED_PORTS'
+        : 'Only standard web ports 80 and 443 are allowed');
     }
   }
 
@@ -42,5 +60,9 @@ async function validateCommon(rawUrl) {
 
 export async function validatePublicTarget(rawUrl) {
   return validateCommon(rawUrl);
+}
+
+export async function validatePublicMediaTarget(rawUrl) {
+  return validateCommon(rawUrl, { media: true });
 }
 
