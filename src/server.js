@@ -415,8 +415,19 @@ app.get('/api/v1/browser-ticket/:ticket',rateLimit(),(req,res)=>{const key=Strin
 
 const previewSessionHandler=async(req,res,next)=>{
   try{
-    const purpose=String(req.body?.purpose||'web').toLowerCase();
-    const target=purpose==='media' ? await validatePublicMediaTarget(req.body?.url) : await validatePublicTarget(req.body?.url);
+    const rawUrl=String(req.body?.url||'');
+    let purpose=String(req.body?.purpose||'').toLowerCase();
+    if(!purpose){
+      try{
+        const parsed=new URL(rawUrl);
+        const port=Number(parsed.port||0);
+        const nonStandardPort=port>0&&!((parsed.protocol==='http:'&&port===80)||(parsed.protocol==='https:'&&port===443));
+        purpose=nonStandardPort?'media':'web';
+      }catch{
+        purpose='web';
+      }
+    }
+    const target=purpose==='media' ? await validatePublicMediaTarget(rawUrl) : await validatePublicTarget(rawUrl);
     const requested=req.body?.nodeRef?findNodeByRef(String(req.body.nodeRef)):null;
     const node=requested||pool.select(selector(req.body));
     if(!node||node.status!=='online')return res.status(503).json({error:'No healthy proxy matches that selection'});
