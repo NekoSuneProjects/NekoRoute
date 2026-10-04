@@ -4,6 +4,18 @@ import { HttpProxyAgent } from 'http-proxy-agent';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
+function guardProxySocket(req, onError) {
+  req.on('socket', socket => {
+    // Public proxies fail in many ugly ways. In particular a proxy/TLS socket can
+    // emit ECONNRESET directly instead of propagating the error through
+    // ClientRequest. Without a listener Node treats that as an unhandled error and
+    // terminates the whole process.
+    socket.on('error', error => {
+      try { onError(error); } catch {}
+    });
+  });
+}
+
 export function makeAgent(proxy, targetProtocol = 'https:') {
   if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
     return new SocksProxyAgent(proxy.url);
@@ -82,6 +94,7 @@ export function requestViaProxy(proxy, targetUrl, {
       });
       res.on('error', fail);
     });
+    guardProxySocket(req, fail);
     req.on('timeout', () => req.destroy(new Error('Proxy request timed out')));
     req.on('error', fail);
     if (body != null && !headersOnly) req.write(body);
@@ -124,12 +137,14 @@ export function openProxyStream(proxy, targetUrl, {
         latencyMs: Date.now() - started
       });
     });
-    req.on('timeout', () => req.destroy(new Error('Proxy request timed out')));
-    req.on('error', error => {
+    const fail = error => {
       if (settled) return;
       settled = true;
       reject(error);
-    });
+    };
+    guardProxySocket(req, fail);
+    req.on('timeout', () => req.destroy(new Error('Proxy request timed out')));
+    req.on('error', fail);
     req.end();
   });
 }
