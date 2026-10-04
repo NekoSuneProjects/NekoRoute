@@ -16,13 +16,29 @@ function guardProxySocket(req, onError) {
   });
 }
 
+function proxyTransportUrl(proxy) {
+  const raw = new URL(proxy.url);
+
+  // Public proxy feeds usually label a node "https" when it supports HTTPS
+  // CONNECT tunnelling. That does NOT mean the proxy listener itself accepts a
+  // TLS connection. Using https:// here makes Node start TLS with the proxy and
+  // many public nodes immediately reset that socket (ECONNRESET).
+  //
+  // Keep the logical protocol as "https" for filtering/UI, but use ordinary
+  // HTTP transport to reach the proxy. HttpsProxyAgent will still issue CONNECT
+  // when the destination itself is HTTPS.
+  if (proxy.protocol === 'https') raw.protocol = 'http:';
+  return raw.toString();
+}
+
 export function makeAgent(proxy, targetProtocol = 'https:') {
+  const transportUrl = proxyTransportUrl(proxy);
   if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
-    return new SocksProxyAgent(proxy.url);
+    return new SocksProxyAgent(transportUrl);
   }
   return targetProtocol === 'http:'
-    ? new HttpProxyAgent(proxy.url)
-    : new HttpsProxyAgent(proxy.url);
+    ? new HttpProxyAgent(transportUrl)
+    : new HttpsProxyAgent(transportUrl);
 }
 
 export function requestViaProxy(proxy, targetUrl, {
