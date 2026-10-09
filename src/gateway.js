@@ -139,6 +139,8 @@ export function startProxyGateways(pool, {
     const port = Number(rawPort || 443);
     try {
       const {socket,node} = await connectBest(hostname, port);
+      client.setTimeout(0);
+      socket.setTimeout(0);
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: NekoRoute\r\n\r\n');
       if (head?.length) socket.write(head);
       // Socket errors must never take down the gateway process.
@@ -163,6 +165,7 @@ export function startProxyGateways(pool, {
     try {
       const port = Number(target.port || (target.protocol === 'https:' ? 443 : 80));
       const {socket} = await connectBest(target.hostname, port);
+      socket.setTimeout(0);
       const headers = {...req.headers, host:target.host};
       delete headers['proxy-authorization']; delete headers['proxy-connection'];
       const lines = [`${req.method} ${target.pathname || '/'}${target.search} HTTP/1.1`, ...Object.entries(headers).map(([k,v])=>`${k}: ${v}`), '', ''];
