@@ -14,6 +14,8 @@ import { saveScanResult } from './database.js';
 import { regionForCountry } from './regions.js';
 import { initThreatIntel, refreshThreatIntel, status as threatIntelStatus } from './threat-intel.js';
 import { startProxyGateways } from './gateway.js';
+import { clamavScanFile, virusTotalFileScan, virusTotalAnalysis, sha256 } from './file-scanner.js';
+
 
 const EXPECTED_PROXY_NETWORK_ERRORS = new Set([
   'ECONNRESET',
@@ -134,12 +136,12 @@ app.get('/api/v1/threat-intel',(_req,res)=>res.json(threatIntelStatus()));
 app.get('/api/v1',(_req,res)=>res.json({
   service:'NekoRoute',version:'0.5.7',docs:'/api/docs',openapi:'/api/openapi.json',endpoints:{
     health:'GET /api/v1/health',stats:'GET /api/v1/stats',regions:'GET /api/v1/regions',countries:'GET /api/v1/countries?region=Europe',nodes:'GET /api/v1/nodes?status=online&country=FR',
-    test:'POST /api/v1/test',matrix:'POST /api/v1/test-matrix',scan:'POST /api/v1/scan',previewSession:'POST /api/v1/preview/session',previewResources:'GET /api/v1/preview/session/:id/resources',browserTicket:'POST /api/v1/browser-ticket',threatIntel:'GET /api/v1/threat-intel'
+    test:'POST /api/v1/test',matrix:'POST /api/v1/test-matrix',scan:'POST /api/v1/scan',fileScan:'POST /api/v1/scan/file',fileAnalysis:'GET /api/v1/scan/file/analysis/:id',previewSession:'POST /api/v1/preview/session',previewResources:'GET /api/v1/preview/session/:id/resources',browserTicket:'POST /api/v1/browser-ticket',threatIntel:'GET /api/v1/threat-intel'
   }
 }));
 app.get('/api/openapi.json',(_req,res)=>res.json({openapi:'3.1.0',info:{title:'NekoRoute Public API',version:'0.5.7',description:'Regional availability diagnostics, defensive scanning, proxy-pool metadata and sandboxed interactive preview sessions.'},paths:{
   '/api/v1/health':{get:{summary:'Service health'}},'/api/v1/stats':{get:{summary:'Proxy pool statistics'}},'/api/v1/regions':{get:{summary:'Region counts'}},'/api/v1/countries':{get:{summary:'Country names and counts'}},'/api/v1/nodes':{get:{summary:'Filtered public node metadata'}},
-  '/api/v1/test':{post:{summary:'Test one URL through a selected/best route'}},'/api/v1/test-matrix':{post:{summary:'Compare one URL across multiple routes'}},'/api/v1/scan':{post:{summary:'Defensive website scan through a proxy'}},'/api/v1/preview/session':{post:{summary:'Create a sandboxed interactive preview session'}},'/api/v1/preview/session/{id}/resources':{get:{summary:'List page-linked resources discovered in an active preview session'}},'/api/v1/browser-ticket':{post:{summary:'Create a one-time ticket for the optional local Firefox Bridge extension'}},'/api/v1/browser-ticket/{ticket}':{get:{summary:'Consume a one-time Firefox Bridge ticket'}}
+  '/api/v1/test':{post:{summary:'Test one URL through a selected/best route'}},'/api/v1/test-matrix':{post:{summary:'Compare one URL across multiple routes'}},'/api/v1/scan':{post:{summary:'Defensive website scan through a proxy'}},'/api/v1/scan/file':{post:{summary:'Authenticated ClamAV file scan and VirusTotal file hash lookup; optional explicit upload'}},'/api/v1/scan/file/analysis/{id}':{get:{summary:'Read a VirusTotal file analysis result'}},'/api/v1/preview/session':{post:{summary:'Create a sandboxed interactive preview session'}},'/api/v1/preview/session/{id}/resources':{get:{summary:'List page-linked resources discovered in an active preview session'}},'/api/v1/browser-ticket':{post:{summary:'Create a one-time ticket for the optional local Firefox Bridge extension'}},'/api/v1/browser-ticket/{ticket}':{get:{summary:'Consume a one-time Firefox Bridge ticket'}}
 }}));
 
 
@@ -181,6 +183,36 @@ app.post('/api/admin/threat-intel/refresh',requireAdmin,async(_req,res,next)=>{t
 const testRouteHandler=async(req,res,next)=>{try{const target=await validatePublicTarget(req.body?.url),sel=selector(req.body);let node=req.body?.nodeRef?findNodeByRef(String(req.body.nodeRef)):pool.select(sel);if(!node||node.status!=='online')return res.status(503).json({error:'No healthy proxy matches that selection'});let lastError;for(let i=0;i<3&&node;i++)try{const r=await requestViaProxy(node,target,{timeoutMs:config.testTimeoutMs,maxBytes:config.maxTestBytes});return res.json({ok:true,node:safeNode(node),target:target.toString(),statusCode:r.statusCode,statusText:http.STATUS_CODES[r.statusCode]||'',latencyMs:r.latencyMs,contentType:r.headers['content-type']||null,location:r.headers.location||null,preview:r.body.slice(0,6000)});}catch(e){lastError=e;node.status='degraded';node.consecutiveFailures=(node.consecutiveFailures||0)+1;node=pool.list({...sel,status:'online'}).find(n=>n.id!==node?.id)||null;}res.status(502).json({error:lastError?.message||'All matching routes failed'});}catch(e){next(e);}};
 const testMatrixHandler=async(req,res,next)=>{try{const target=await validatePublicTarget(req.body?.url),sel=selector(req.body),count=Math.max(1,Math.min(config.matrixMaxNodes,Number(req.body?.limit||8)));let nodes=pool.list({...sel,status:'online'});if(req.body?.nodeRef){const n=findNodeByRef(String(req.body.nodeRef));nodes=n&&n.status==='online'?[n]:[];}nodes=nodes.slice(0,count);if(!nodes.length)return res.status(503).json({error:'No healthy proxies match that selection'});const limit=pLimit(config.matrixConcurrency),started=Date.now();const results=await Promise.all(nodes.map(node=>limit(async()=>{try{const r=await requestViaProxy(node,target,{timeoutMs:config.testTimeoutMs,maxBytes:8192,headersOnly:true});return{ok:true,node:safeNode(node),statusCode:r.statusCode,statusText:http.STATUS_CODES[r.statusCode]||'',latencyMs:r.latencyMs,location:r.headers.location||null,contentType:r.headers['content-type']||null};}catch(e){return{ok:false,node:safeNode(node),statusCode:null,statusText:'',latencyMs:null,error:String(e.message||e)};}})));const counts={};for(const r of results){const k=r.statusCode==null?'error':String(r.statusCode);counts[k]=(counts[k]||0)+1;}res.json({ok:true,target:target.toString(),durationMs:Date.now()-started,tested:results.length,counts,results});}catch(e){next(e);}};
 const scanHandler=async(req,res,next)=>{try{const target=await validatePublicTarget(req.body?.url),requested=req.body?.nodeRef?findNodeByRef(String(req.body.nodeRef)):null,node=requested||pool.select(selector(req.body));if(!node||node.status!=='online')return res.status(503).json({error:'No healthy proxy matches that selection'});const report=await scanWebsite(node,target.toString(),config),output={ok:true,...report,node:safeNode(node),notice:'Heuristic, local-feed and reputation results are indicators, not a guarantee that a site is safe or malicious.'};if(config.storeScanHistory)saveScanResult({target:report.target,nodeId:node.id,country:node.country,verdict:report.verdict,score:report.score,statusCode:report.statusCode,findings:report.findings,providers:report.providers}).catch(e=>console.error('[scanner] persist:',e.message));res.json(output);}catch(e){next(e);}};
+// File submissions are authenticated, size-limited, and never written to disk.
+// Content type: application/octet-stream. Optional ?uploadToVirusTotal=true is an
+// explicit consent action. Hash-only lookups do not send file contents to VirusTotal.
+const fileBody = express.raw({type:'application/octet-stream',limit:'20mb'});
+app.post('/api/v1/scan/file',requireAdmin,rateLimit(6),fileBody,async(req,res)=>{
+  if(!Buffer.isBuffer(req.body)||req.body.length === 0) return res.status(400).json({error:'Send a non-empty application/octet-stream body'});
+  const uploadToVirusTotal = req.query.uploadToVirusTotal === 'true';
+  const filename = String(req.get('x-file-name')||'sample.bin').replace(/[\\/\x00-\x1f]/g,'_').slice(0,180);
+  const digest = sha256(req.body);
+  const clamAV = await clamavScanFile(req.body,{host:config.clamavHost,port:config.clamavPort,timeoutMs:30000});
+  const virusTotal = await virusTotalFileScan(req.body,{
+    apiKey:config.virusTotalApiKey,upload:uploadToVirusTotal,filename
+  });
+  const categories = virusTotal.stats || {};
+  const suspicious = (Number(categories.malicious)||0)+(Number(categories.suspicious)||0);
+  const verdict = clamAV.status === 'infected'||(Number(categories.malicious)||0)>0 ? 'detected'
+    : suspicious>0 ? 'suspicious'
+    : clamAV.status === 'clean'&&virusTotal.known&&suspicious===0 ? 'no_detections'
+    : 'unknown';
+  res.set('Cache-Control','no-store').json({
+    ok:true,filename,size:req.body.length,sha256:digest,verdict,
+    clamAV,virusTotal,
+    notice:'No detections does not guarantee safety. Public VirusTotal submissions may be shared with third parties; upload only files you have permission to disclose.'
+  });
+});
+app.get('/api/v1/scan/file/analysis/:id',requireAdmin,rateLimit(10),async(req,res)=>{
+  const report=await virusTotalAnalysis(String(req.params.id),config.virusTotalApiKey);
+  res.set('Cache-Control','no-store').json(report);
+});
+
 app.post(['/api/test-route','/api/v1/test'],rateLimit(),testRouteHandler);
 app.post(['/api/test-matrix','/api/v1/test-matrix'],rateLimit(),testMatrixHandler);
 app.post(['/api/scan','/api/v1/scan'],rateLimit(config.scanRateLimitMax),scanHandler);
