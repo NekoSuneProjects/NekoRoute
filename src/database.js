@@ -163,13 +163,15 @@ export async function persistNodes(nodes) {
     sourcePresent: node.sourcePresent !== false
   }));
   if (!rows.length) return;
-  await ProxyNode.bulkCreate(rows, {
+  for (let offset = 0; offset < rows.length; offset += 250) {
+    await ProxyNode.bulkCreate(rows.slice(offset, offset + 250), {
     updateOnDuplicate: [
       'url','protocol','ip','port','https','anonymity','sourceScore','country','city','source','region',
       'status','latencyMs','exitIp','connectionType','isVpn','isProxy','isTor','isHostingProvider','isNonResidential','isHomeResidential','ipAsn','ipOrg','ipConfidence','ipDetectionSource','ipDetectionReason','ipLookupAt','successes','failures','consecutiveFailures','lastCheck','lastSuccess',
       'lastError','firstSeen','lastSeen','sourcePresent'
     ]
-  });
+    });
+  }
 }
 
 export async function saveScanResult(result) {

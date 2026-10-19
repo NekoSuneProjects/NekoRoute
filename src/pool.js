@@ -9,24 +9,37 @@ const IP_LOOKUP_URL = process.env.IP_LOOKUP_URL || 'https://api.nekosunevr.co.uk
 const IP_LOOKUP_TIMEOUT_MS = Math.max(1000, Number.parseInt(process.env.IP_LOOKUP_TIMEOUT_MS || '5000', 10));
 const IP_LOOKUP_TTL_MS = Math.max(60000, Number.parseInt(process.env.IP_LOOKUP_TTL_MS || '21600000', 10));
 const ipLookupCache = new Map();
+const ipLookupInFlight = new Map();
+const NEGATIVE_TTL_MS = Math.max(60000, Number(process.env.IP_LOOKUP_FAILURE_TTL_MS || 600000));
 
 async function lookupExitIp(ip) {
   if (!ip) return null;
   const cached = ipLookupCache.get(ip);
-  if (cached && Date.now() - cached.at < IP_LOOKUP_TTL_MS) return cached.data;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), IP_LOOKUP_TIMEOUT_MS);
-  try {
-    const response = await fetch(`${IP_LOOKUP_URL}?ip=${encodeURIComponent(ip)}`, {
-      signal: controller.signal,
-      headers: { accept: 'application/json', 'user-agent': 'NekoRoute/0.6 (+proxy-ip-classification)' }
-    });
-    if (!response.ok) throw new Error(`IP lookup HTTP ${response.status}`);
-    const data = await response.json();
-    if (!data?.valid) throw new Error('IP lookup returned invalid result');
-    ipLookupCache.set(ip, { at: Date.now(), data });
-    return data;
-  } finally { clearTimeout(timer); }
+  if (cached && Date.now() - cached.at < (cached.error ? NEGATIVE_TTL_MS : IP_LOOKUP_TTL_MS)) {
+    if (cached.error) throw new Error(cached.error);
+    return cached.data;
+  }
+  if (ipLookupInFlight.has(ip)) return ipLookupInFlight.get(ip);
+  const pending = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IP_LOOKUP_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${IP_LOOKUP_URL}?ip=${encodeURIComponent(ip)}`, {
+        signal: controller.signal,
+        headers: { accept: 'application/json', 'user-agent': 'NekoRoute/0.6 (+proxy-ip-classification)' }
+      });
+      if (!response.ok) throw new Error(`IP lookup HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data?.valid) throw new Error('IP lookup returned invalid result');
+      ipLookupCache.set(ip, { at: Date.now(), data });
+      return data;
+    } catch (error) {
+      ipLookupCache.set(ip, { at: Date.now(), error: String(error.message || error) });
+      throw error;
+    } finally { clearTimeout(timer); }
+  })();
+  ipLookupInFlight.set(ip, pending);
+  try { return await pending; } finally { ipLookupInFlight.delete(ip); }
 }
 
 function applyIpLookup(node, data) {
@@ -57,6 +70,10 @@ export class ProxyPool {
     this.lastHealthSweep = null;
     this.cursor = 0;
     this.databaseReady = false;
+    this.dirtyNodes = new Map();
+    this.dirtyRevision = 0;
+    this.saveQueue = Promise.resolve();
+    this.historyCursor = 0;
   }
 
   async loadState() {
@@ -99,18 +116,29 @@ export class ProxyPool {
     this.lastHealthSweep = await getState('lastHealthSweep', null);
   }
 
+  markDirty(node) {
+    if (node?.id) this.dirtyNodes.set(node.id, ++this.dirtyRevision);
+  }
   async saveState(nodes = null) {
-    try {
-      if (!this.databaseReady) return;
-      await persistNodes(nodes || [...this.nodes.values()]);
-      await Promise.all([
-        setState('healthCursor', this.cursor),
-        setState('lastSourceRefresh', this.lastSourceRefresh),
-        setState('lastHealthSweep', this.lastHealthSweep)
-      ]);
-    } catch (error) {
-      console.error('[state] SQLite save failed:', error.message);
-    }
+    if (!this.databaseReady) return;
+    if (nodes) for (const node of nodes) this.markDirty(node);
+    const flush = async () => {
+      const pending = [...this.dirtyNodes.entries()];
+      for (let offset = 0; offset < pending.length; offset += 250) {
+        const chunk = pending.slice(offset, offset + 250);
+        const snapshot = chunk.map(([id]) => this.nodes.get(id)).filter(Boolean).map(node => ({ ...node }));
+        await persistNodes(snapshot);
+        for (const [id, revision] of chunk) {
+          if (this.dirtyNodes.get(id) === revision) this.dirtyNodes.delete(id);
+        }
+      }
+      await setState('healthCursor', this.cursor);
+      await setState('lastSourceRefresh', this.lastSourceRefresh);
+      await setState('lastHealthSweep', this.lastHealthSweep);
+    };
+    const next = this.saveQueue.then(flush);
+    this.saveQueue = next.catch(error => console.error('[state] SQLite save failed:', error.message));
+    return next;
   }
 
   async refreshSources() {
@@ -124,22 +152,22 @@ export class ProxyPool {
     const successfulSources = new Set(sourceStats.filter(stat => stat.ok).map(stat => stat.source));
     if (successfulSources.size) {
       for (const node of this.nodes.values()) {
-        if (successfulSources.has(node.source)) node.sourcePresent = false;
+        if (successfulSources.has(node.source) && node.sourcePresent !== false) {
+          node.sourcePresent = false;
+          this.markDirty(node);
+        }
       }
     }
 
     for (const incoming of proxies) {
       const previous = this.nodes.get(incoming.id);
       if (!previous) {
-        this.nodes.set(incoming.id, {
-          ...incoming,
-          firstSeen: now,
-          lastSeen: now,
-          sourcePresent: true
-        });
+        const created = { ...incoming, firstSeen: now, lastSeen: now, sourcePresent: true };
+        this.nodes.set(incoming.id, created);
+        this.markDirty(created);
         continue;
       }
-      this.nodes.set(incoming.id, {
+      const updated = {
         ...previous,
         ...incoming,
         status: previous.status || incoming.status,
@@ -154,7 +182,9 @@ export class ProxyPool {
         firstSeen: previous.firstSeen || now,
         lastSeen: now,
         sourcePresent: true
-      });
+      };
+      this.nodes.set(incoming.id, updated);
+      this.markDirty(updated);
     }
 
     this.sourceStats = sourceStats;
@@ -173,6 +203,7 @@ export class ProxyPool {
       if (result.statusCode < 200 || result.statusCode >= 400) throw new Error(`health endpoint HTTP ${result.statusCode}`);
       let exitIp = null;
       try { exitIp = JSON.parse(result.body).ip || null; } catch {}
+      const previousExitIp = node.exitIp;
       Object.assign(node, {
         status: 'online',
         latencyMs: result.latencyMs,
@@ -185,7 +216,7 @@ export class ProxyPool {
       });
       if (exitIp) {
         const lookupExpired = !node.ipLookupAt || Date.now() - new Date(node.ipLookupAt).getTime() >= IP_LOOKUP_TTL_MS;
-        if (node.exitIp !== exitIp || lookupExpired) {
+        if (previousExitIp !== exitIp || lookupExpired) {
           try { applyIpLookup(node, await lookupExitIp(exitIp)); }
           catch (error) { console.warn(`[iplookup] ${exitIp}: ${error.message}`); }
         }
@@ -215,7 +246,6 @@ export class ProxyPool {
     if (force) ipLookupCache.clear();
     await Promise.allSettled(nodes.map(node => limit(async () => {
       try {
-        if (force) ipLookupCache.delete(node.exitIp);
         applyIpLookup(node, await lookupExitIp(node.exitIp));
         updated++;
       } catch (error) {
@@ -228,19 +258,27 @@ export class ProxyPool {
   }
 
   async healthSweep() {
-    const nodes = [...this.nodes.values()];
-    if (!nodes.length) return;
+    const now = Date.now();
+    const nodes = [], historical = [];
+    for (const node of this.nodes.values()) {
+      const recent = node.lastSuccess && now - new Date(node.lastSuccess).getTime() < 86400000;
+      (node.sourcePresent !== false || recent ? nodes : historical).push(node);
+    }
+    if (!nodes.length && !historical.length) return;
     const batch = [];
     for (let i = 0; i < Math.min(this.config.healthBatchSize, nodes.length); i++) {
       batch.push(nodes[(this.cursor + i) % nodes.length]);
     }
-    this.cursor = (this.cursor + batch.length) % nodes.length;
+    this.cursor = nodes.length ? (this.cursor + batch.length) % nodes.length : 0;
+    if (historical.length) {
+      batch.push(historical[this.historyCursor % historical.length]);
+      this.historyCursor = (this.historyCursor + 1) % historical.length;
+    }
     const limit = pLimit(12);
     await Promise.allSettled(batch.map(node => limit(() => this.checkNode(node))));
 
     // Automatically refresh network classification for usable routes. This keeps
     // Residential / Hosting / VPN / Proxy / Tor tags current without an admin UI.
-    const now = Date.now();
     const classify = batch.filter(node =>
       (node.status === 'online' || node.status === 'degraded') &&
       node.exitIp &&
@@ -249,7 +287,6 @@ export class ProxyPool {
     const classifyLimit = pLimit(8);
     await Promise.allSettled(classify.map(node => classifyLimit(async () => {
       try {
-        ipLookupCache.delete(node.exitIp);
         applyIpLookup(node, await lookupExitIp(node.exitIp));
       } catch (error) {
         console.warn(`[iplookup] automatic refresh ${node.exitIp}: ${error.message}`);
